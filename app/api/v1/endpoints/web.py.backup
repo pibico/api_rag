@@ -1,0 +1,551 @@
+"""
+Web chat interface for RAG - styled to match Whisper interface
+"""
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse
+
+router = APIRouter()
+
+
+@router.get("/chat", response_class=HTMLResponse, tags=["Web Interface"])
+async def chat_interface(request: Request):
+    """
+    Serve RAG document chat interface with Whisper-style UI
+    """
+    # Detect base path from request
+    # When accessed through nginx proxy with HTTPS, use /rag prefix
+    # When accessed directly on port 6956, no prefix needed
+    if request.headers.get('x-forwarded-proto') == 'https':
+        base_path = '/rag'
+    else:
+        # Check if URL contains /rag/ for direct access
+        request_url = str(request.url.path)
+        if '/rag/' in request_url:
+            base_path = '/rag'
+        else:
+            base_path = ''
+
+    api_endpoint = f"{base_path}/api/v1"
+
+    html_content = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#4682b4">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="RAG Chat">
+    <meta name="description" content="Document chat with AI-powered RAG">
+    <title>RAG Document Chat</title>
+    <link rel="stylesheet" href="{base_path}/static/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{base_path}/static/css/bootstrap-icons.min.css">
+    <link rel="stylesheet" href="{base_path}/static/css/fontawesome.min.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@300;400;500;600;700&family=Raleway:wght@300;400;500;600;700&display=swap">
+    <link rel="stylesheet" href="{base_path}/static/css/chat.css?v=20251018b">
+</head>
+<body>
+    <div class="app-container" id="appContainer">
+        <!-- Mobile Overlay -->
+        <div class="mobile-overlay" id="mobileOverlay" onclick="closeSidebar()"></div>
+
+        <!-- Sidebar -->
+        <div class="sidebar collapsed" id="sidebar">
+            <div class="sidebar-header">
+                <button class="sidebar-toggle" onclick="toggleSidebar()">
+                    <i class="bi bi-chevron-right" id="sidebarIcon"></i>
+                </button>
+                <div class="sidebar-title">RAG Chat</div>
+            </div>
+            <button class="new-upload-btn" onclick="showUploadModal()">
+                <i class="bi bi-cloud-upload"></i> Upload Document
+            </button>
+            <div class="search-box">
+                <span>🔍</span>
+                <input type="text" placeholder="Search documents..." id="searchInput" oninput="filterDocuments()">
+            </div>
+            <div class="documents-list" id="documentsList">
+                <p style="text-align: center; padding: 20px; color: #6b7280;">No documents yet</p>
+            </div>
+            <div class="sidebar-footer">
+                <button class="sidebar-user-btn" onclick="openSettings()">
+                    <span class="user-avatar" id="userAvatar">U</span>
+                    <div class="user-info">
+                        <div class="user-name" id="userName">Guest</div>
+                    </div>
+                    <span class="settings-icon">⚙️</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <div class="top-bar">
+                <button class="sidebar-toggle" onclick="toggleSidebar()">
+                    <i class="bi bi-chevron-right" id="topbarIcon"></i>
+                </button>
+            </div>
+            <div id="welcomeScreen" class="welcome-screen">
+                <div>
+                    <h2>📚 Welcome to RAG Chat</h2>
+                    <p>Upload documents and chat with them using AI</p>
+                </div>
+            </div>
+            <div class="chat-area" id="chatArea" style="display: none;"></div>
+            <div class="input-area" id="inputArea" style="display: none;">
+                <input type="text" id="messageInput" placeholder="Ask about your document..." onkeypress="handleKeyPress(event)">
+                <button class="btn btn-primary" onclick="sendMessage()">
+                    <i class="bi bi-send"></i> Send
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Login Modal -->
+    <div class="modal-overlay" id="loginModal" onclick="closeModalOnOverlay(event)">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <button class="modal-close" onclick="closeModal('loginModal')">×</button>
+            <h2 class="modal-title">Login / Register</h2>
+            <div class="setting-group">
+                <label>Username</label>
+                <input type="text" id="loginUsername">
+            </div>
+            <div class="setting-group">
+                <label>Email (for registration)</label>
+                <input type="email" id="loginEmail">
+            </div>
+            <div class="setting-group">
+                <label>Password</label>
+                <input type="password" id="loginPassword">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-primary" onclick="login()">Login</button>
+                <button class="btn btn-primary" onclick="register()">Register</button>
+                <button class="btn btn-secondary" onclick="closeModal('loginModal')">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload Modal -->
+    <div class="modal-overlay" id="uploadModal" onclick="closeModalOnOverlay(event)">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <button class="modal-close" onclick="closeModal('uploadModal')">×</button>
+            <h2 class="modal-title">Upload Document</h2>
+            <div class="setting-group">
+                <label>Document Title</label>
+                <input type="text" id="uploadTitle" placeholder="My Document">
+            </div>
+            <div class="setting-group">
+                <label>File (PDF, TXT, MD)</label>
+                <input type="file" id="uploadFile" accept=".pdf,.txt,.md,.markdown">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-primary" onclick="uploadDocument()">
+                    <i class="bi bi-cloud-upload"></i> Upload
+                </button>
+                <button class="btn btn-secondary" onclick="closeModal('uploadModal')">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay" id="settingsModal" onclick="closeModalOnOverlay(event)">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <button class="modal-close" onclick="closeModal('settingsModal')">×</button>
+            <h2 class="modal-title">Settings</h2>
+            <div class="setting-group">
+                <label>Your Name</label>
+                <input type="text" id="userNameInput" value="User">
+            </div>
+            <div class="setting-group">
+                <label>API Key</label>
+                <input type="password" id="apiKeyInput" value="mi-rag">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-primary" onclick="saveSettings()">
+                    <i class="bi bi-check-circle"></i> Save Settings
+                </button>
+                <button class="btn btn-secondary" onclick="closeModal('settingsModal')">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div class="toast-notification" id="toastNotification">
+        <i class="bi bi-check-circle"></i>
+        <span id="toastMessage">Success!</span>
+    </div>
+
+    <script src="{base_path}/static/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // API configuration
+        window.API_ENDPOINT = '{api_endpoint}';
+        window.BASE_PATH = '{base_path}';
+    </script>
+    <script>
+        // Global state
+        let token = localStorage.getItem('rag_token');
+        let currentSession = null;
+        let currentDocument = null;
+        let documents = [];
+        let apiKey = localStorage.getItem('rag_api_key') || 'mi-rag';
+
+        // Mobile viewport height fix
+        function updateVH() {{
+            let vh = window.innerHeight * 0.01;
+            document.documentElement.style.setProperty('--vh', `${{vh}}px`);
+        }}
+        window.addEventListener('resize', updateVH);
+        window.addEventListener('orientationchange', updateVH);
+        updateVH();
+
+        // Sidebar toggle
+        function toggleSidebar() {{
+            const app = document.getElementById('appContainer');
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('mobileOverlay');
+            const icon1 = document.getElementById('sidebarIcon');
+            const icon2 = document.getElementById('topbarIcon');
+
+            if (app.classList.contains('sidebar-open')) {{
+                app.classList.remove('sidebar-open');
+                sidebar.classList.add('collapsed');
+                overlay.classList.remove('active');
+                icon1.style.transform = 'rotate(0deg)';
+                icon2.style.transform = 'rotate(0deg)';
+            }} else {{
+                app.classList.add('sidebar-open');
+                sidebar.classList.remove('collapsed');
+                overlay.classList.add('active');
+                icon1.style.transform = 'rotate(180deg)';
+                icon2.style.transform = 'rotate(180deg)';
+            }}
+        }}
+
+        function closeSidebar() {{
+            const app = document.getElementById('appContainer');
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('mobileOverlay');
+            const icon1 = document.getElementById('sidebarIcon');
+            const icon2 = document.getElementById('topbarIcon');
+
+            app.classList.remove('sidebar-open');
+            sidebar.classList.add('collapsed');
+            overlay.classList.remove('active');
+            icon1.style.transform = 'rotate(0deg)';
+            icon2.style.transform = 'rotate(0deg)';
+        }}
+
+        // Modal functions
+        function openSettings() {{
+            document.getElementById('settingsModal').classList.add('active');
+        }}
+
+        function showUploadModal() {{
+            if (!token) {{
+                showToast('Please login first', 'error');
+                document.getElementById('loginModal').classList.add('active');
+                return;
+            }}
+            document.getElementById('uploadModal').classList.add('active');
+        }}
+
+        function closeModal(id) {{
+            document.getElementById(id).classList.remove('active');
+        }}
+
+        function closeModalOnOverlay(event) {{
+            if (event.target === event.currentTarget) {{
+                event.currentTarget.classList.remove('active');
+            }}
+        }}
+
+        // Toast notifications
+        function showToast(message, type = 'success') {{
+            const toast = document.getElementById('toastNotification');
+            const toastMessage = document.getElementById('toastMessage');
+            toastMessage.textContent = message;
+            toast.className = `toast-notification ${{type}}`;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }}
+
+        // Auth functions
+        async function login() {{
+            const username = document.getElementById('loginUsername').value;
+            const password = document.getElementById('loginPassword').value;
+
+            if (!username || !password) {{
+                showToast('Please enter username and password', 'error');
+                return;
+            }}
+
+            const formData = new FormData();
+            formData.append('username', username);
+            formData.append('password', password);
+
+            try {{
+                const res = await fetch(`${{API_ENDPOINT}}/auth/login`, {{
+                    method: 'POST',
+                    body: formData
+                }});
+
+                if (res.ok) {{
+                    const data = await res.json();
+                    token = data.access_token;
+                    localStorage.setItem('rag_token', token);
+                    document.getElementById('userName').textContent = username;
+                    document.getElementById('userAvatar').textContent = username[0].toUpperCase();
+                    closeModal('loginModal');
+                    showToast('Login successful!', 'success');
+                    loadDocuments();
+                }} else {{
+                    showToast('Login failed', 'error');
+                }}
+            }} catch (err) {{
+                showToast('Error: ' + err.message, 'error');
+            }}
+        }}
+
+        async function register() {{
+            const username = document.getElementById('loginUsername').value;
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+
+            if (!username || !email || !password) {{
+                showToast('Please fill all fields', 'error');
+                return;
+            }}
+
+            try {{
+                const res = await fetch(`${{API_ENDPOINT}}/auth/register`, {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ username, email, password }})
+                }});
+
+                if (res.ok) {{
+                    showToast('Registered successfully! Now login.', 'success');
+                }} else {{
+                    const error = await res.json();
+                    showToast('Registration failed: ' + (error.detail || 'Unknown error'), 'error');
+                }}
+            }} catch (err) {{
+                showToast('Error: ' + err.message, 'error');
+            }}
+        }}
+
+        // Document functions
+        async function uploadDocument() {{
+            const title = document.getElementById('uploadTitle').value;
+            const file = document.getElementById('uploadFile').files[0];
+
+            if (!title || !file) {{
+                showToast('Please fill all fields', 'error');
+                return;
+            }}
+
+            const formData = new FormData();
+            formData.append('title', title);
+            formData.append('file', file);
+
+            try {{
+                const res = await fetch(`${{API_ENDPOINT}}/documents/upload`, {{
+                    method: 'POST',
+                    headers: {{ 'Authorization': `Bearer ${{token}}` }},
+                    body: formData
+                }});
+
+                if (res.ok) {{
+                    showToast('Document uploaded! Indexing...', 'success');
+                    closeModal('uploadModal');
+                    document.getElementById('uploadTitle').value = '';
+                    document.getElementById('uploadFile').value = '';
+                    loadDocuments();
+                }} else {{
+                    showToast('Upload failed', 'error');
+                }}
+            }} catch (err) {{
+                showToast('Error: ' + err.message, 'error');
+            }}
+        }}
+
+        async function loadDocuments() {{
+            if (!token) return;
+
+            try {{
+                const res = await fetch(`${{API_ENDPOINT}}/documents/`, {{
+                    headers: {{ 'Authorization': `Bearer ${{token}}` }}
+                }});
+
+                if (res.ok) {{
+                    documents = await res.json();
+                    renderDocuments();
+                }}
+            }} catch (err) {{
+                console.error('Error loading documents:', err);
+            }}
+        }}
+
+        function renderDocuments() {{
+            const list = document.getElementById('documentsList');
+
+            if (documents.length === 0) {{
+                list.innerHTML = '<p style="text-align: center; padding: 20px; color: #6b7280;">No documents yet</p>';
+                return;
+            }}
+
+            list.innerHTML = documents.map(doc => `
+                <div class="document-item ${{currentDocument?.id === doc.id ? 'active' : ''}}" onclick="selectDocument(${{doc.id}})">
+                    <div class="document-title">${{doc.title}}</div>
+                    <div class="document-status ${{doc.status}}">${{doc.status}}</div>
+                </div>
+            `).join('');
+        }}
+
+        async function selectDocument(docId) {{
+            const doc = documents.find(d => d.id === docId);
+            if (!doc) return;
+
+            if (doc.status !== 'ready') {{
+                showToast('Document is still indexing. Please wait.', 'error');
+                return;
+            }}
+
+            currentDocument = doc;
+            renderDocuments();
+
+            // Create session
+            try {{
+                const res = await fetch(`${{API_ENDPOINT}}/chat/sessions`, {{
+                    method: 'POST',
+                    headers: {{
+                        'Authorization': `Bearer ${{token}}`,
+                        'Content-Type': 'application/json'
+                    }},
+                    body: JSON.stringify({{ document_id: docId }})
+                }});
+
+                if (res.ok) {{
+                    currentSession = await res.json();
+                    document.getElementById('welcomeScreen').style.display = 'none';
+                    document.getElementById('chatArea').style.display = 'flex';
+                    document.getElementById('inputArea').style.display = 'flex';
+                    document.getElementById('chatArea').innerHTML = '';
+                    showToast('Session started!', 'success');
+                }}
+            }} catch (err) {{
+                showToast('Error creating session: ' + err.message, 'error');
+            }}
+        }}
+
+        function filterDocuments() {{
+            const query = document.getElementById('searchInput').value.toLowerCase();
+            const items = document.querySelectorAll('.document-item');
+            items.forEach(item => {{
+                const title = item.querySelector('.document-title').textContent.toLowerCase();
+                item.style.display = title.includes(query) ? '' : 'none';
+            }});
+        }}
+
+        // Chat functions
+        async function sendMessage() {{
+            const input = document.getElementById('messageInput');
+            const query = input.value.trim();
+
+            if (!query || !currentSession) return;
+
+            addMessage(query, 'user');
+            input.value = '';
+
+            try {{
+                const res = await fetch(`${{API_ENDPOINT}}/chat/query`, {{
+                    method: 'POST',
+                    headers: {{
+                        'Authorization': `Bearer ${{token}}`,
+                        'Content-Type': 'application/json'
+                    }},
+                    body: JSON.stringify({{
+                        session_id: currentSession.id,
+                        query: query,
+                        top_k: 5
+                    }})
+                }});
+
+                if (res.ok) {{
+                    const data = await res.json();
+                    addMessage(data.answer, 'assistant');
+                }} else {{
+                    addMessage('Error: Could not get response', 'error');
+                }}
+            }} catch (err) {{
+                addMessage('Error: ' + err.message, 'error');
+            }}
+        }}
+
+        function addMessage(text, role) {{
+            const chatArea = document.getElementById('chatArea');
+            const div = document.createElement('div');
+            div.className = `message ${{role}}`;
+            div.textContent = text;
+            chatArea.appendChild(div);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }}
+
+        function handleKeyPress(e) {{
+            if (e.key === 'Enter') sendMessage();
+        }}
+
+        // Settings functions
+        function saveSettings() {{
+            const userName = document.getElementById('userNameInput').value;
+            const newApiKey = document.getElementById('apiKeyInput').value;
+
+            document.getElementById('userName').textContent = userName;
+            if (userName) {{
+                document.getElementById('userAvatar').textContent = userName[0].toUpperCase();
+            }}
+
+            apiKey = newApiKey;
+            localStorage.setItem('rag_api_key', apiKey);
+
+            closeModal('settingsModal');
+            showToast('Settings saved!', 'success');
+        }}
+
+        // Initialize
+        if (token) {{
+            fetch(`${{API_ENDPOINT}}/auth/me`, {{
+                headers: {{ 'Authorization': `Bearer ${{token}}` }}
+            }}).then(res => {{
+                if (res.ok) {{
+                    res.json().then(user => {{
+                        document.getElementById('userName').textContent = user.username;
+                        document.getElementById('userAvatar').textContent = user.username[0].toUpperCase();
+                        loadDocuments();
+                    }});
+                }} else {{
+                    localStorage.removeItem('rag_token');
+                    token = null;
+                }}
+            }});
+        }}
+
+        // Auto-refresh documents
+        setInterval(() => {{
+            if (token) loadDocuments();
+        }}, 5000);
+
+        // Load saved settings
+        const savedApiKey = localStorage.getItem('rag_api_key');
+        if (savedApiKey) {{
+            apiKey = savedApiKey;
+            document.getElementById('apiKeyInput').value = apiKey;
+        }}
+    </script>
+</body>
+</html>
+    """
+
+    return HTMLResponse(content=html_content)
